@@ -67,6 +67,7 @@ public:
     int64_t PruneAfterHeight() const { return nPruneAfterHeight; }
     unsigned int EquihashN() const { return nEquihashN; }
     unsigned int EquihashK() const { return nEquihashK; }
+    std::string CurrencyUnits() const { return strCurrencyUnits; }
     /** Make miner stop after a block is found. In RPC, don't return until nGenProcLimit blocks are generated */
     bool MineBlocksOnDemand() const { return fMineBlocksOnDemand; }
     /** In the future use NetworkIDString() for RPC fields */
@@ -77,6 +78,12 @@ public:
     const std::vector<unsigned char>& Base58Prefix(Base58Type type) const { return base58Prefixes[type]; }
     const std::vector<SeedSpec6>& FixedSeeds() const { return vFixedSeeds; }
     const Checkpoints::CCheckpointData& Checkpoints() const { return checkpointData; }
+    /** Return the founder's reward address and script for a given block height */
+    std::string GetFoundersRewardAddressAtHeight(int height) const;
+    CScript GetFoundersRewardScriptAtHeight(int height) const;
+    std::string GetFoundersRewardAddressAtIndex(int i) const;
+    /** Enforce coinbase consensus rule in regtest mode */
+    void SetRegTestCoinbaseMustBeProtected() { consensus.fCoinbaseMustBeProtected = true; }
 protected:
     CChainParams() {}
 
@@ -84,24 +91,26 @@ protected:
     CMessageHeader::MessageStartChars pchMessageStart;
     //! Raw pub key bytes for the broadcast alert signing key.
     std::vector<unsigned char> vAlertPubKey;
-    int nDefaultPort;
-    int nMinerThreads;
-    long nMaxTipAge;
-    uint64_t nPruneAfterHeight;
-    unsigned int nEquihashN;
-    unsigned int nEquihashK;
+    int nDefaultPort = 0;
+    int nMinerThreads = 0;
+    long nMaxTipAge = 0;
+    uint64_t nPruneAfterHeight = 0;
+    unsigned int nEquihashN = 0;
+    unsigned int nEquihashK = 0;
     std::vector<CDNSSeedData> vSeeds;
     std::vector<unsigned char> base58Prefixes[MAX_BASE58_TYPES];
     std::string strNetworkID;
+    std::string strCurrencyUnits;
     CBlock genesis;
     std::vector<SeedSpec6> vFixedSeeds;
-    bool fRequireRPCPassword;
-    bool fMiningRequiresPeers;
-    bool fDefaultConsistencyChecks;
-    bool fRequireStandard;
-    bool fMineBlocksOnDemand;
-    bool fTestnetToBeDeprecatedFieldRPC;
+    bool fRequireRPCPassword = false;
+    bool fMiningRequiresPeers = false;
+    bool fDefaultConsistencyChecks = false;
+    bool fRequireStandard = false;
+    bool fMineBlocksOnDemand = false;
+    bool fTestnetToBeDeprecatedFieldRPC = false;
     Checkpoints::CCheckpointData checkpointData;
+    std::vector<std::string> vFoundersRewardAddress;
 };
 
 /**

@@ -11,7 +11,10 @@ export BITCOIND=${REAL_BITCOIND}
 #Run the tests
 
 testScripts=(
+    'wallet_treestate.py'
+    'wallet_protectcoinbase.py'
     'wallet.py'
+    'wallet_nullifiers.py'
     'listtransactions.py'
     'mempool_resurrect_test.py'
     'txn_doublespend.py'
@@ -27,8 +30,9 @@ testScripts=(
     'merkle_blocks.py'
     'signrawtransactions.py'
     'walletbackup.py'
-    'zcpour.py'
-    'zcpourdoublespend.py'
+    'zcjoinsplit.py'
+    'zcjoinsplitdoublespend.py'
+    'getblocktemplate.py'
 );
 testScriptsExt=(
     'bipdersig-p2p.py'

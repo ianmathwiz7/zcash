@@ -15,6 +15,9 @@
 #ifdef ENABLE_WALLET
 #include "wallet/wallet.h"
 #endif
+#include "asyncrpcqueue.h"
+
+#include <memory>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/asio.hpp>
@@ -254,10 +257,10 @@ Value stop(const Array& params, bool fHelp)
     if (fHelp || params.size() > 1)
         throw runtime_error(
             "stop\n"
-            "\nStop Bitcoin server.");
+            "\nStop Zcash server.");
     // Shutdown will take long enough that the response should get back
     StartShutdown();
-    return "Bitcoin server stopping";
+    return "Zcash server stopping";
 }
 
 
@@ -301,9 +304,12 @@ static const CRPCCommand vRPCCommands[] =
     /* Mining */
     { "mining",             "getblocktemplate",       &getblocktemplate,       true  },
     { "mining",             "getmininginfo",          &getmininginfo,          true  },
+    { "mining",             "getlocalsolps",          &getlocalsolps,          true  },
+    { "mining",             "getnetworksolps",        &getnetworksolps,        true  },
     { "mining",             "getnetworkhashps",       &getnetworkhashps,       true  },
     { "mining",             "prioritisetransaction",  &prioritisetransaction,  true  },
     { "mining",             "submitblock",            &submitblock,            true  },
+    { "mining",             "getblocksubsidy",        &getblocksubsidy,        true  },
 
 #ifdef ENABLE_WALLET
     /* Coin generation */
@@ -326,6 +332,7 @@ static const CRPCCommand vRPCCommands[] =
     { "util",               "verifymessage",          &verifymessage,          true  },
     { "util",               "estimatefee",            &estimatefee,            true  },
     { "util",               "estimatepriority",       &estimatepriority,       true  },
+    { "util",               "z_validateaddress",      &z_validateaddress,      true  }, /* uses wallet if enabled */
 
     /* Not shown in help */
     { "hidden",             "invalidateblock",        &invalidateblock,        true  },
@@ -378,8 +385,22 @@ static const CRPCCommand vRPCCommands[] =
     { "wallet",             "walletpassphrase",       &walletpassphrase,       true  },
     { "wallet",             "zcbenchmark",            &zc_benchmark,           true  },
     { "wallet",             "zcrawkeygen",            &zc_raw_keygen,          true  },
-    { "wallet",             "zcrawpour",              &zc_raw_pour,            true  },
-    { "wallet",             "zcrawreceive",           &zc_raw_receive,         true  }
+    { "wallet",             "zcrawjoinsplit",         &zc_raw_joinsplit,       true  },
+    { "wallet",             "zcrawreceive",           &zc_raw_receive,         true  },
+    { "wallet",             "zcsamplejoinsplit",      &zc_sample_joinsplit,    true  },
+    { "wallet",             "z_listreceivedbyaddress",&z_listreceivedbyaddress,false },
+    { "wallet",             "z_getbalance",           &z_getbalance,           false },
+    { "wallet",             "z_gettotalbalance",      &z_gettotalbalance,      false },
+    { "wallet",             "z_sendmany",             &z_sendmany,             false },
+    { "wallet",             "z_getoperationstatus",   &z_getoperationstatus,   true  },
+    { "wallet",             "z_getoperationresult",   &z_getoperationresult,   true  },
+    { "wallet",             "z_listoperationids",     &z_listoperationids,     true  },
+    { "wallet",             "z_getnewaddress",        &z_getnewaddress,        true  },
+    { "wallet",             "z_listaddresses",        &z_listaddresses,        true  },
+    { "wallet",             "z_exportkey",            &z_exportkey,            true  },
+    { "wallet",             "z_importkey",            &z_importkey,            true  },
+    { "wallet",             "z_exportwallet",         &z_exportwallet,         true  },
+    { "wallet",             "z_importwallet",         &z_importwallet,         true  }
 #endif // ENABLE_WALLET
 };
 
@@ -605,16 +626,16 @@ void StartRPCThreads()
         unsigned char rand_pwd[32];
         GetRandBytes(rand_pwd, 32);
         uiInterface.ThreadSafeMessageBox(strprintf(
-            _("To use bitcoind, or the -server option to bitcoin-qt, you must set an rpcpassword in the configuration file:\n"
+            _("To use zcashd you must set an rpcpassword in the configuration file:\n"
               "%s\n"
               "It is recommended you use the following random password:\n"
-              "rpcuser=bitcoinrpc\n"
+              "rpcuser=zcashrpc\n"
               "rpcpassword=%s\n"
               "(you do not need to remember this password)\n"
               "The username and password MUST NOT be the same.\n"
               "If the file does not exist, create it with owner-readable-only file permissions.\n"
               "It is also recommended to set alertnotify so you are notified of problems;\n"
-              "for example: alertnotify=echo %%s | mail -s \"Bitcoin Alert\" admin@foo.com\n"),
+              "for example: alertnotify=echo %%s | mail -s \"Zcash Alert\" admin@foo.com\n"),
                 GetConfigFile().string(),
                 EncodeBase58(&rand_pwd[0],&rand_pwd[0]+32)),
                 "", CClientUIInterface::MSG_ERROR | CClientUIInterface::SECURE);
@@ -729,6 +750,21 @@ void StartRPCThreads()
         rpc_worker_group->create_thread(boost::bind(&boost::asio::io_service::run, rpc_io_service));
     fRPCRunning = true;
     g_rpcSignals.Started();
+
+    // Launch one async rpc worker.  The ability to launch multiple workers is not recommended at present and thus the option is disabled.
+    getAsyncRPCQueue()->addWorker();
+/*   
+    int n = GetArg("-rpcasyncthreads", 1);
+    if (n<1) {
+        LogPrintf("ERROR: Invalid value %d for -rpcasyncthreads.  Must be at least 1.\n", n);
+        strerr = strprintf(_("An error occurred while setting up the Async RPC threads, invalid parameter value of %d (must be at least 1)."), n);
+        uiInterface.ThreadSafeMessageBox(strerr, "", CClientUIInterface::MSG_ERROR);
+        StartShutdown();
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        getAsyncRPCQueue()->addWorker();
+*/
 }
 
 void StartDummyRPCThread()
@@ -778,6 +814,10 @@ void StopRPCThreads()
     delete rpc_worker_group; rpc_worker_group = NULL;
     delete rpc_ssl_context; rpc_ssl_context = NULL;
     delete rpc_io_service; rpc_io_service = NULL;
+
+    // Tells async queue to cancel all operations and shutdown.
+    LogPrintf("%s: waiting for async rpc workers to stop\n", __func__);
+    getAsyncRPCQueue()->closeAndWait();
 }
 
 bool IsRPCRunning()
@@ -987,9 +1027,15 @@ void ServiceConnection(AcceptedConnection *conn)
         // Read HTTP message headers and body
         ReadHTTPMessage(conn->stream(), mapHeaders, strRequest, nProto, MAX_SIZE);
 
+        // TODO #1856: Re-enable support for persistent connections.
+        // We have disabled support for HTTP Keep-Alive until resolution of #1680, upstream rpc deadlock.
+        // Close connection immediately.
+        fRun = false;
+        /*
         // HTTP Keep-Alive is false; close connection immediately
         if ((mapHeaders["connection"] == "close") || (!GetBoolArg("-rpckeepalive", true)))
             fRun = false;
+        */
 
         // Process via JSON-RPC API
         if (strURI == "/") {
@@ -1031,7 +1077,7 @@ json_spirit::Value CRPCTable::execute(const std::string &strMethod, const json_s
 }
 
 std::string HelpExampleCli(string methodname, string args){
-    return "> bitcoin-cli " + methodname + " " + args + "\n";
+    return "> zcash-cli " + methodname + " " + args + "\n";
 }
 
 std::string HelpExampleRpc(string methodname, string args){
@@ -1040,3 +1086,9 @@ std::string HelpExampleRpc(string methodname, string args){
 }
 
 const CRPCTable tableRPC;
+
+// Return async rpc queue
+std::shared_ptr<AsyncRPCQueue> getAsyncRPCQueue()
+{
+    return AsyncRPCQueue::sharedInstance();
+}

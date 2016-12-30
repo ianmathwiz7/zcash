@@ -8,8 +8,7 @@
 #endif
 
 #include "init.h"
-#include "sodium.h"
-
+#include "crypto/common.h"
 #include "addrman.h"
 #include "amount.h"
 #include "checkpoints.h"
@@ -17,6 +16,7 @@
 #include "consensus/validation.h"
 #include "key.h"
 #include "main.h"
+#include "metrics.h"
 #include "miner.h"
 #include "net.h"
 #include "rpcserver.h"
@@ -52,6 +52,8 @@
 
 using namespace std;
 
+extern void ThreadSendAlert();
+
 ZCJoinSplit* pzcashParams = NULL;
 
 #ifdef ENABLE_WALLET
@@ -60,7 +62,7 @@ CWallet* pwalletMain = NULL;
 bool fFeeEstimatesInitialized = false;
 
 #ifdef WIN32
-// Win32 LevelDB doesn't use filedescriptors, and the ones used for
+// Win32 LevelDB doesn't use file descriptors, and the ones used for
 // accessing block files don't count towards the fd_set size limit
 // anyway.
 #define MIN_CORE_FILEDESCRIPTORS 0
@@ -109,7 +111,7 @@ CClientUIInterface uiInterface; // Declared but not defined in ui_interface.h
 // shutdown thing.
 //
 
-volatile bool fRequestShutdown = false;
+std::atomic<bool> fRequestShutdown(false);
 
 void StartShutdown()
 {
@@ -155,7 +157,7 @@ void Shutdown()
     /// for example if the data directory was found to be locked.
     /// Be sure that anything that writes files or flushes caches only does this if the respective
     /// module was initialized.
-    RenameThread("bitcoin-shutoff");
+    RenameThread("zcash-shutoff");
     mempool.AddTransactionsUpdated(1);
     StopRPCThreads();
 #ifdef ENABLE_WALLET
@@ -207,6 +209,8 @@ void Shutdown()
     delete pwalletMain;
     pwalletMain = NULL;
 #endif
+    delete pzcashParams;
+    pzcashParams = NULL;
     ECC_Stop();
     LogPrintf("%s: done\n", __func__);
 }
@@ -335,7 +339,6 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-whitebind=<addr>", _("Bind to given address and whitelist peers connecting to it. Use [host]:port notation for IPv6"));
     strUsage += HelpMessageOpt("-whitelist=<netmask>", _("Whitelist peers connecting from the given netmask or IP address. Can be specified multiple times.") +
         " " + _("Whitelisted peers cannot be DoS banned and their transactions are always relayed, even if they are already in the mempool, useful e.g. for a gateway"));
-        
 
 #ifdef ENABLE_WALLET
     strUsage += HelpMessageGroup(_("Wallet options:"));
@@ -345,7 +348,7 @@ std::string HelpMessage(HelpMessageMode mode)
         strUsage += HelpMessageOpt("-mintxfee=<amt>", strprintf("Fees (in BTC/Kb) smaller than this are considered zero fee for transaction creation (default: %s)",
             FormatMoney(CWallet::minTxFee.GetFeePerK())));
     strUsage += HelpMessageOpt("-paytxfee=<amt>", strprintf(_("Fee (in BTC/kB) to add to transactions you send (default: %s)"), FormatMoney(payTxFee.GetFeePerK())));
-    strUsage += HelpMessageOpt("-rescan", _("Rescan the block chain for missing wallet transactions") + " " + _("on startup"));
+    strUsage += HelpMessageOpt("-rescan", _("Rescan the blockchain for missing wallet transactions") + " " + _("on startup"));
     strUsage += HelpMessageOpt("-salvagewallet", _("Attempt to recover private keys from a corrupt wallet.dat") + " " + _("on startup"));
     strUsage += HelpMessageOpt("-sendfreetransactions", strprintf(_("Send transactions as zero-fee transactions if possible (default: %u)"), 0));
     strUsage += HelpMessageOpt("-spendzeroconfchange", strprintf(_("Spend unconfirmed change when sending transactions (default: %u)"), 1));
@@ -377,10 +380,11 @@ std::string HelpMessage(HelpMessageMode mode)
     if (mode == HMM_BITCOIN_QT)
         debugCategories += ", qt";
     strUsage += HelpMessageOpt("-debug=<category>", strprintf(_("Output debugging information (default: %u, supplying <category> is optional)"), 0) + ". " +
-        _("If <category> is not supplied, output all debugging information.") + _("<category> can be:") + " " + debugCategories + ".");
+        _("If <category> is not supplied or if <category> = 1, output all debugging information.") + _("<category> can be:") + " " + debugCategories + ".");
 #ifdef ENABLE_WALLET
     strUsage += HelpMessageOpt("-gen", strprintf(_("Generate coins (default: %u)"), 0));
     strUsage += HelpMessageOpt("-genproclimit=<n>", strprintf(_("Set the number of threads for coin generation if enabled (-1 = all cores, default: %d)"), 1));
+    strUsage += HelpMessageOpt("-equihashsolver=<name>", _("Specify the Equihash solver to be used if enabled (default: \"default\")"));
 #endif
     strUsage += HelpMessageOpt("-help-debug", _("Show all debugging options (usage: --help -help-debug)"));
     strUsage += HelpMessageOpt("-logips", strprintf(_("Include IP addresses in debug output (default: %u)"), 0));
@@ -421,7 +425,13 @@ std::string HelpMessage(HelpMessageMode mode)
     strUsage += HelpMessageOpt("-rpcport=<port>", strprintf(_("Listen for JSON-RPC connections on <port> (default: %u or testnet: %u)"), 8232, 18232));
     strUsage += HelpMessageOpt("-rpcallowip=<ip>", _("Allow JSON-RPC connections from specified source. Valid for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0) or a network/CIDR (e.g. 1.2.3.4/24). This option can be specified multiple times"));
     strUsage += HelpMessageOpt("-rpcthreads=<n>", strprintf(_("Set the number of threads to service RPC calls (default: %d)"), 4));
-    strUsage += HelpMessageOpt("-rpckeepalive", strprintf(_("RPC support for HTTP persistent connections (default: %d)"), 1));
+
+    // TODO #1856: Re-enable support for persistent connections.
+    // Disabled to avoid rpc deadlock #1680, until we backport upstream changes which replace boost::asio with libevent, or another solution is implemented.
+    //strUsage += HelpMessageOpt("-rpckeepalive", strprintf(_("RPC support for HTTP persistent connections (default: %d)"), 1));
+
+    // Disabled until we can lock notes and also tune performance of libsnark which by default uses multiple threads
+    //strUsage += HelpMessageOpt("-rpcasyncthreads=<n>", strprintf(_("Set the number of threads to service Async RPC calls (default: %d)"), 1));
 
     strUsage += HelpMessageGroup(_("RPC SSL options: (see the Bitcoin Wiki for SSL setup instructions)"));
     strUsage += HelpMessageOpt("-rpcssl", _("Use OpenSSL (https) for JSON-RPC connections"));
@@ -440,6 +450,11 @@ std::string HelpMessage(HelpMessageMode mode)
         strUsage += HelpMessageOpt("-min", _("Start minimized"));
         strUsage += HelpMessageOpt("-rootcertificates=<file>", _("Set SSL root certificates for payment request (default: -system-)"));
         strUsage += HelpMessageOpt("-splash", _("Show splash screen on startup (default: 1)"));
+    } else if (mode == HMM_BITCOIND) {
+        strUsage += HelpMessageGroup(_("Metrics Options (only if -daemon and -printtoconsole are not set):"));
+        strUsage += HelpMessageOpt("-showmetrics", _("Show metrics on stdout (default: 1 if running in a console, 0 otherwise)"));
+        strUsage += HelpMessageOpt("-metricsui", _("Set to 1 for a persistent metrics screen, 0 for sequential metrics output (default: 1 if running in a console, 0 otherwise)"));
+        strUsage += HelpMessageOpt("-metricsrefreshtime", strprintf(_("Number of seconds between metrics refreshes (default: %u if running in a console, %u otherwise)"), 1, 600));
     }
 
     return strUsage;
@@ -524,7 +539,7 @@ void CleanupBlockRevFiles()
 
 void ThreadImport(std::vector<boost::filesystem::path> vImportFiles)
 {
-    RenameThread("bitcoin-loadblk");
+    RenameThread("zcash-loadblk");
     // -reindex
     if (fReindex) {
         CImportingNow imp;
@@ -603,19 +618,19 @@ static void ZC_LoadParams()
     struct timeval tv_start, tv_end;
     float elapsed;
 
-    boost::filesystem::path pk_path = ZC_GetParamsDir() / "z5-proving.key";
-    boost::filesystem::path vk_path = ZC_GetParamsDir() / "z5-verifying.key";
+    boost::filesystem::path pk_path = ZC_GetParamsDir() / "sprout-proving.key";
+    boost::filesystem::path vk_path = ZC_GetParamsDir() / "sprout-verifying.key";
 
     pzcashParams = ZCJoinSplit::Unopened();
 
-    LogPrintf("Loading verification key from %s\n", vk_path.string().c_str());
+    LogPrintf("Loading verifying key from %s\n", vk_path.string().c_str());
     gettimeofday(&tv_start, 0);
 
     pzcashParams->loadVerifyingKey(vk_path.string());
 
     gettimeofday(&tv_end, 0);
     elapsed = float(tv_end.tv_sec-tv_start.tv_sec) + (tv_end.tv_usec-tv_start.tv_usec)/float(1000000);
-    LogPrintf("Loaded verification key in %fs seconds.\n", elapsed);
+    LogPrintf("Loaded verifying key in %fs seconds.\n", elapsed);
 
     pzcashParams->setProvingKeyPath(pk_path.string());
 }
@@ -625,14 +640,6 @@ static void ZC_LoadParams()
  */
 bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
 {
-    // Perform libsodium initialization
-    if (sodium_init() == -1) {
-        return false;
-    }
-
-    // ********************************************************* Step 0: Load zcash params
-    ZC_LoadParams();
-
     // ********************************************************* Step 1: setup
 #ifdef _MSC_VER
     // Turn off Microsoft heap dump noise
@@ -912,12 +919,17 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
 
     // ********************************************************* Step 4: application initialization: dir lock, daemonize, pidfile, debug log
 
+    // Initialize libsodium
+    if (init_and_check_sodium() == -1) {
+        return false;
+    }
+
     // Initialize elliptic curve code
     ECC_Start();
 
     // Sanity check
     if (!InitSanityCheck())
-        return InitError(_("Initialization sanity check failed. Bitcoin Core is shutting down."));
+        return InitError(_("Initialization sanity check failed. Zcash is shutting down."));
 
     std::string strDataDir = GetDataDir().string();
 #ifdef ENABLE_WALLET
@@ -933,9 +945,9 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     try {
         static boost::interprocess::file_lock lock(pathLockFile.string().c_str());
         if (!lock.try_lock())
-            return InitError(strprintf(_("Cannot obtain a lock on data directory %s. Bitcoin Core is probably already running."), strDataDir));
+            return InitError(strprintf(_("Cannot obtain a lock on data directory %s. Zcash is probably already running."), strDataDir));
     } catch(const boost::interprocess::interprocess_exception& e) {
-        return InitError(strprintf(_("Cannot obtain a lock on data directory %s. Bitcoin Core is probably already running.") + " %s.", strDataDir, e.what()));
+        return InitError(strprintf(_("Cannot obtain a lock on data directory %s. Zcash is probably already running.") + " %s.", strDataDir, e.what()));
     }
 
 #ifndef WIN32
@@ -944,7 +956,7 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     if (GetBoolArg("-shrinkdebugfile", !fDebug))
         ShrinkDebugFile();
     LogPrintf("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
-    LogPrintf("Bitcoin version %s (%s)\n", FormatFullVersion(), CLIENT_DATE);
+    LogPrintf("Zcash version %s (%s)\n", FormatFullVersion(), CLIENT_DATE);
     LogPrintf("Using OpenSSL version %s\n", SSLeay_version(SSLEAY_VERSION));
 #ifdef ENABLE_WALLET
     LogPrintf("Using BerkeleyDB version %s\n", DbEnv::version(0, 0, 0));
@@ -966,6 +978,25 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
     // Start the lightweight task scheduler thread
     CScheduler::Function serviceLoop = boost::bind(&CScheduler::serviceQueue, &scheduler);
     threadGroup.create_thread(boost::bind(&TraceThread<CScheduler::Function>, "scheduler", serviceLoop));
+
+    // Count uptime
+    MarkStartTime();
+
+    if ((chainparams.NetworkIDString() != "regtest") &&
+            GetBoolArg("-showmetrics", isatty(STDOUT_FILENO)) &&
+            !fPrintToConsole && !GetBoolArg("-daemon", false)) {
+        // Start the persistent metrics interface
+        ConnectMetricsScreen();
+        threadGroup.create_thread(&ThreadShowMetricsScreen);
+    }
+
+    // These must be disabled for now, they are buggy and we probably don't
+    // want any of libsnark's profiling in production anyway.
+    libsnark::inhibit_profiling_info = true;
+    libsnark::inhibit_profiling_counters = true;
+
+    // Initialize Zcash circuit parameters
+    ZC_LoadParams();
 
     /* Start the RPC server already.  It will be started in "warmup" mode
      * and not really process calls already (but it will signify connections
@@ -1260,10 +1291,6 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         mempool.ReadFeeEstimates(est_filein);
     fFeeEstimatesInitialized = true;
 
-    // These must be disabled for now, they are buggy and we probably don't
-    // want any of libsnark's profiling in production anyway.
-    libsnark::inhibit_profiling_info = true;
-    libsnark::inhibit_profiling_counters = true;
 
     // ********************************************************* Step 8: load wallet
 #ifdef ENABLE_WALLET
@@ -1355,7 +1382,10 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
 
         CBlockIndex *pindexRescan = chainActive.Tip();
         if (GetBoolArg("-rescan", false))
+        {
+            pwalletMain->ClearNoteWitnessCache();
             pindexRescan = chainActive.Genesis();
+        }
         else
         {
             CWalletDB walletdb(strWalletFile);
@@ -1490,6 +1520,9 @@ bool AppInit2(boost::thread_group& threadGroup, CScheduler& scheduler)
         threadGroup.create_thread(boost::bind(&ThreadFlushWalletDB, boost::ref(pwalletMain->strWalletFile)));
     }
 #endif
+
+    // SENDALERT
+    threadGroup.create_thread(boost::bind(ThreadSendAlert));
 
     return !fRequestShutdown;
 }

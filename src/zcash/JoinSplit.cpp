@@ -2,7 +2,6 @@
 #include "prf.h"
 #include "sodium.h"
 
-#include "zerocash/utils/util.h"
 #include "zcash/util.h"
 
 #include <memory>
@@ -17,6 +16,7 @@
 #include "libsnark/gadgetlib1/gadgets/merkle_tree/merkle_tree_check_read_gadget.hpp"
 
 #include "sync.h"
+#include "amount.h"
 
 using namespace libsnark;
 
@@ -25,7 +25,7 @@ namespace libzcash {
 #include "zcash/circuit/gadget.tcc"
 
 CCriticalSection cs_ParamsIO;
-CCriticalSection cs_InitializeParams;
+CCriticalSection cs_LoadKeys;
 
 template<typename T>
 void saveToFile(std::string path, T& obj) {
@@ -71,19 +71,19 @@ public:
 
     boost::optional<r1cs_ppzksnark_proving_key<ppzksnark_ppT>> pk;
     boost::optional<r1cs_ppzksnark_verification_key<ppzksnark_ppT>> vk;
+    boost::optional<r1cs_ppzksnark_processed_verification_key<ppzksnark_ppT>> vk_precomp;
     boost::optional<std::string> pkPath;
 
-    static void initialize() {
-        LOCK(cs_InitializeParams);
-
-        ppzksnark_ppT::init_public_params();
-    }
+    JoinSplitCircuit() {}
+    ~JoinSplitCircuit() {}
 
     void setProvingKeyPath(std::string path) {
         pkPath = path;
     }
 
     void loadProvingKey() {
+        LOCK(cs_LoadKeys);
+
         if (!pk) {
             if (!pkPath) {
                 throw std::runtime_error("proving key path unknown");
@@ -100,7 +100,14 @@ public:
         }
     }
     void loadVerifyingKey(std::string path) {
+        LOCK(cs_LoadKeys);
+
         loadFromFile(path, vk);
+
+        processVerifyingKey();
+    }
+    void processVerifyingKey() {
+        vk_precomp = r1cs_ppzksnark_verifier_process_vk(*vk);
     }
     void saveVerifyingKey(std::string path) {
         if (vk) {
@@ -109,24 +116,35 @@ public:
             throw std::runtime_error("cannot save verifying key; key doesn't exist");
         }
     }
+    void saveR1CS(std::string path) {
+        auto r1cs = generate_r1cs();
 
-    void generate() {
+        saveToFile(path, r1cs);
+    }
+
+    r1cs_constraint_system<FieldT> generate_r1cs() {
         protoboard<FieldT> pb;
 
         joinsplit_gadget<FieldT, NumInputs, NumOutputs> g(pb);
         g.generate_r1cs_constraints();
 
-        const r1cs_constraint_system<FieldT> constraint_system = pb.get_constraint_system();
+        return pb.get_constraint_system();
+    }
+
+    void generate() {
+        LOCK(cs_LoadKeys);
+
+        const r1cs_constraint_system<FieldT> constraint_system = generate_r1cs();
         r1cs_ppzksnark_keypair<ppzksnark_ppT> keypair = r1cs_ppzksnark_generator<ppzksnark_ppT>(constraint_system);
 
         pk = keypair.pk;
         vk = keypair.vk;
+        processVerifyingKey();
     }
 
-    JoinSplitCircuit() {}
-
     bool verify(
-        const boost::array<unsigned char, ZKSNARK_PROOF_SIZE>& proof,
+        const ZCProof& proof,
+        ProofVerifier& verifier,
         const uint256& pubKeyHash,
         const uint256& randomSeed,
         const boost::array<uint256, NumInputs>& macs,
@@ -136,32 +154,37 @@ public:
         uint64_t vpub_new,
         const uint256& rt
     ) {
-        if (!vk) {
+        if (!vk || !vk_precomp) {
             throw std::runtime_error("JoinSplit verifying key not loaded");
         }
 
-        r1cs_ppzksnark_proof<ppzksnark_ppT> r1cs_proof;
-        std::stringstream ss;
-        std::string proof_str(proof.begin(), proof.end());
-        ss.str(proof_str);
-        ss >> r1cs_proof;
+        try {
+            auto r1cs_proof = proof.to_libsnark_proof<r1cs_ppzksnark_proof<ppzksnark_ppT>>();
 
-        uint256 h_sig = this->h_sig(randomSeed, nullifiers, pubKeyHash);
+            uint256 h_sig = this->h_sig(randomSeed, nullifiers, pubKeyHash);
 
-        auto witness = joinsplit_gadget<FieldT, NumInputs, NumOutputs>::witness_map(
-            rt,
-            h_sig,
-            macs,
-            nullifiers,
-            commitments,
-            vpub_old,
-            vpub_new
-        );
+            auto witness = joinsplit_gadget<FieldT, NumInputs, NumOutputs>::witness_map(
+                rt,
+                h_sig,
+                macs,
+                nullifiers,
+                commitments,
+                vpub_old,
+                vpub_new
+            );
 
-        return r1cs_ppzksnark_verifier_strong_IC<ppzksnark_ppT>(*vk, witness, r1cs_proof);
+            return verifier.check(
+                *vk,
+                *vk_precomp,
+                witness,
+                r1cs_proof
+            );
+        } catch (...) {
+            return false;
+        }
     }
 
-    boost::array<unsigned char, ZKSNARK_PROOF_SIZE> prove(
+    ZCProof prove(
         const boost::array<JSInput, NumInputs>& inputs,
         const boost::array<JSOutput, NumOutputs>& outputs,
         boost::array<Note, NumOutputs>& out_notes,
@@ -174,14 +197,58 @@ public:
         boost::array<uint256, NumOutputs>& out_commitments,
         uint64_t vpub_old,
         uint64_t vpub_new,
-        const uint256& rt
+        const uint256& rt,
+        bool computeProof
     ) {
-        if (!pk) {
+        if (computeProof && !pk) {
             throw std::runtime_error("JoinSplit proving key not loaded");
         }
 
-        // Compute nullifiers of inputs
+        if (vpub_old > MAX_MONEY) {
+            throw std::invalid_argument("nonsensical vpub_old value");
+        }
+
+        if (vpub_new > MAX_MONEY) {
+            throw std::invalid_argument("nonsensical vpub_new value");
+        }
+
+        uint64_t lhs_value = vpub_old;
+        uint64_t rhs_value = vpub_new;
+
         for (size_t i = 0; i < NumInputs; i++) {
+            // Sanity checks of input
+            {
+                // If note has nonzero value
+                if (inputs[i].note.value != 0) {
+                    // The witness root must equal the input root.
+                    if (inputs[i].witness.root() != rt) {
+                        throw std::invalid_argument("joinsplit not anchored to the correct root");
+                    }
+
+                    // The tree must witness the correct element
+                    if (inputs[i].note.cm() != inputs[i].witness.element()) {
+                        throw std::invalid_argument("witness of wrong element for joinsplit input");
+                    }
+                }
+
+                // Ensure we have the key to this note.
+                if (inputs[i].note.a_pk != inputs[i].key.address().a_pk) {
+                    throw std::invalid_argument("input note not authorized to spend with given key");
+                }
+
+                // Balance must be sensical
+                if (inputs[i].note.value > MAX_MONEY) {
+                    throw std::invalid_argument("nonsensical input note value");
+                }
+
+                lhs_value += inputs[i].note.value;
+
+                if (lhs_value > MAX_MONEY) {
+                    throw std::invalid_argument("nonsensical left hand size of joinsplit balance");
+                }
+            }
+
+            // Compute nullifier of input
             out_nullifiers[i] = inputs[i].nullifier();
         }
 
@@ -196,10 +263,27 @@ public:
 
         // Compute notes for outputs
         for (size_t i = 0; i < NumOutputs; i++) {
+            // Sanity checks of output
+            {
+                if (outputs[i].value > MAX_MONEY) {
+                    throw std::invalid_argument("nonsensical output value");
+                }
+
+                rhs_value += outputs[i].value;
+
+                if (rhs_value > MAX_MONEY) {
+                    throw std::invalid_argument("nonsensical right hand side of joinsplit balance");
+                }
+            }
+
             // Sample r
             uint256 r = random_uint256();
 
             out_notes[i] = outputs[i].note(phi, r, i, h_sig);
+        }
+
+        if (lhs_value != rhs_value) {
+            throw std::invalid_argument("invalid joinsplit balance");
         }
 
         // Compute the output commitments
@@ -213,11 +297,7 @@ public:
             ZCNoteEncryption encryptor(h_sig);
 
             for (size_t i = 0; i < NumOutputs; i++) {
-                // TODO: expose memo in the public interface
-                // 0xF6 is invalid UTF8 as per spec
-                boost::array<unsigned char, ZC_MEMO_SIZE> memo = {{0xF6}};
-
-                NotePlaintext pt(out_notes[i], memo);
+                NotePlaintext pt(out_notes[i], outputs[i].memo);
 
                 out_ciphertexts[i] = pt.encrypt(encryptor, outputs[i].addr.pk_enc);
             }
@@ -232,56 +312,52 @@ public:
             out_macs[i] = PRF_pk(inputs[i].key, i, h_sig);
         }
 
-        std::vector<FieldT> primary_input;
-        std::vector<FieldT> aux_input;
-
-        {
-            protoboard<FieldT> pb;
-            {
-                joinsplit_gadget<FieldT, NumInputs, NumOutputs> g(pb);
-                g.generate_r1cs_constraints();
-                g.generate_r1cs_witness(
-                    phi,
-                    rt,
-                    h_sig,
-                    inputs,
-                    out_notes,
-                    vpub_old,
-                    vpub_new
-                );
-            }
-
-            if (!pb.is_satisfied()) {
-                throw std::invalid_argument("Constraint system not satisfied by inputs");
-            }
-
-            primary_input = pb.primary_input();
-            aux_input = pb.auxiliary_input();
+        if (!computeProof) {
+            return ZCProof();
         }
 
-        auto proof = r1cs_ppzksnark_prover<ppzksnark_ppT>(
+        protoboard<FieldT> pb;
+        {
+            joinsplit_gadget<FieldT, NumInputs, NumOutputs> g(pb);
+            g.generate_r1cs_constraints();
+            g.generate_r1cs_witness(
+                phi,
+                rt,
+                h_sig,
+                inputs,
+                out_notes,
+                vpub_old,
+                vpub_new
+            );
+        }
+
+        // The constraint system must be satisfied or there is an unimplemented
+        // or incorrect sanity check above. Or the constraint system is broken!
+        assert(pb.is_satisfied());
+
+        // TODO: These are copies, which is not strictly necessary.
+        std::vector<FieldT> primary_input = pb.primary_input();
+        std::vector<FieldT> aux_input = pb.auxiliary_input();
+
+        // Swap A and B if it's beneficial (less arithmetic in G2)
+        // In our circuit, we already know that it's beneficial
+        // to swap, but it takes so little time to perform this
+        // estimate that it doesn't matter if we check every time.
+        pb.constraint_system.swap_AB_if_beneficial();
+
+        return ZCProof(r1cs_ppzksnark_prover<ppzksnark_ppT>(
             *pk,
             primary_input,
-            aux_input
-        );
-
-        std::stringstream ss;
-        ss << proof;
-        std::string serialized_proof = ss.str();
-
-        boost::array<unsigned char, ZKSNARK_PROOF_SIZE> result_proof;
-        //std::cout << "proof size in bytes when serialized: " << serialized_proof.size() << std::endl;
-        assert(serialized_proof.size() == ZKSNARK_PROOF_SIZE);
-        memcpy(&result_proof[0], &serialized_proof[0], ZKSNARK_PROOF_SIZE);
-
-        return result_proof;
+            aux_input,
+            pb.constraint_system
+        ));
     }
 };
 
 template<size_t NumInputs, size_t NumOutputs>
 JoinSplit<NumInputs, NumOutputs>* JoinSplit<NumInputs, NumOutputs>::Generate()
 {
-    JoinSplitCircuit<NumInputs, NumOutputs>::initialize();
+    initialize_curve_params();
     auto js = new JoinSplitCircuit<NumInputs, NumOutputs>();
     js->generate();
 
@@ -291,7 +367,7 @@ JoinSplit<NumInputs, NumOutputs>* JoinSplit<NumInputs, NumOutputs>::Generate()
 template<size_t NumInputs, size_t NumOutputs>
 JoinSplit<NumInputs, NumOutputs>* JoinSplit<NumInputs, NumOutputs>::Unopened()
 {
-    JoinSplitCircuit<NumInputs, NumOutputs>::initialize();
+    initialize_curve_params();
     return new JoinSplitCircuit<NumInputs, NumOutputs>();
 }
 

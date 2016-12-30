@@ -43,9 +43,18 @@ public:
     Hash empty_root(size_t depth) {
         return empty_roots.at(depth);
     }
+    template <size_t D, typename H>
+    friend bool operator==(const EmptyMerkleRoots<D, H>& a,
+                           const EmptyMerkleRoots<D, H>& b);
 private:
     boost::array<Hash, Depth+1> empty_roots;
 };
+
+template<size_t Depth, typename Hash>
+bool operator==(const EmptyMerkleRoots<Depth, Hash>& a,
+                const EmptyMerkleRoots<Depth, Hash>& b) {
+    return a.empty_roots == b.empty_roots;
+}
 
 template<size_t Depth, typename Hash>
 class IncrementalWitness;
@@ -60,10 +69,19 @@ public:
 
     IncrementalMerkleTree() { }
 
+    size_t DynamicMemoryUsage() const {
+        return 32 + // left
+               32 + // right
+               parents.size() * 32; // parents
+    }
+
+    size_t size() const;
+
     void append(Hash obj);
     Hash root() const {
         return root(Depth, std::deque<Hash>());
     }
+    Hash last() const;
 
     IncrementalWitness<Depth, Hash> witness() const {
         return IncrementalWitness<Depth, Hash>(*this);
@@ -84,6 +102,10 @@ public:
         return emptyroots.empty_root(Depth);
     }
 
+    template <size_t D, typename H>
+    friend bool operator==(const IncrementalMerkleTree<D, H>& a,
+                           const IncrementalMerkleTree<D, H>& b);
+
 private:
     static EmptyMerkleRoots<Depth, Hash> emptyroots;
     boost::optional<Hash> left;
@@ -98,13 +120,31 @@ private:
     void wfcheck() const;
 };
 
+template<size_t Depth, typename Hash>
+bool operator==(const IncrementalMerkleTree<Depth, Hash>& a,
+                const IncrementalMerkleTree<Depth, Hash>& b) {
+    return (a.emptyroots == b.emptyroots &&
+            a.left == b.left &&
+            a.right == b.right &&
+            a.parents == b.parents);
+}
+
 template <size_t Depth, typename Hash>
 class IncrementalWitness {
 friend class IncrementalMerkleTree<Depth, Hash>;
 
 public:
+    // Required for Unserialize()
+    IncrementalWitness() {}
+
     MerklePath path() const {
         return tree.path(partial_path());
+    }
+
+    // Return the element being witnessed (should be a note
+    // commitment!)
+    Hash element() const {
+        return tree.last();
     }
 
     Hash root() const {
@@ -124,14 +164,27 @@ public:
         cursor_depth = tree.next_depth(filled.size());
     }
 
+    template <size_t D, typename H>
+    friend bool operator==(const IncrementalWitness<D, H>& a,
+                           const IncrementalWitness<D, H>& b);
+
 private:
     IncrementalMerkleTree<Depth, Hash> tree;
     std::vector<Hash> filled;
     boost::optional<IncrementalMerkleTree<Depth, Hash>> cursor;
-    size_t cursor_depth;
+    size_t cursor_depth = 0;
     std::deque<Hash> partial_path() const;
     IncrementalWitness(IncrementalMerkleTree<Depth, Hash> tree) : tree(tree) {}
 };
+
+template<size_t Depth, typename Hash>
+bool operator==(const IncrementalWitness<Depth, Hash>& a,
+                const IncrementalWitness<Depth, Hash>& b) {
+    return (a.tree == b.tree &&
+            a.filled == b.filled &&
+            a.cursor == b.cursor &&
+            a.cursor_depth == b.cursor_depth);
+}
 
 class SHA256Compress : public uint256 {
 public:

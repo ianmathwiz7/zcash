@@ -107,9 +107,10 @@ bool fPrintToDebugLog = true;
 bool fDaemon = false;
 bool fServer = false;
 string strMiscWarning;
-bool fLogTimestamps = false;
-bool fLogIPs = false;
-volatile bool fReopenDebugLog = false;
+bool fLogTimestamps = DEFAULT_LOGTIMESTAMPS;
+bool fLogTimeMicros = DEFAULT_LOGTIMEMICROS;
+bool fLogIPs = DEFAULT_LOGIPS;
+std::atomic<bool> fReopenDebugLog(false);
 CTranslationInterface translationInterface;
 
 /** Init OpenSSL library multithreading support */
@@ -216,6 +217,7 @@ bool LogAcceptCategory(const char* category)
 
         // if not debugging everything and not debugging specific category, LogPrint does nothing.
         if (setCategories.count(string("")) == 0 &&
+            setCategories.count(string("1")) == 0 &&
             setCategories.count(string(category)) == 0)
             return false;
     }
@@ -381,7 +383,7 @@ static std::string FormatException(const std::exception* pex, const char* pszThr
     char pszModule[MAX_PATH] = "";
     GetModuleFileNameA(NULL, pszModule, sizeof(pszModule));
 #else
-    const char* pszModule = "bitcoin";
+    const char* pszModule = "Zcash";
 #endif
     if (pex)
         return strprintf(
@@ -478,7 +480,6 @@ const boost::filesystem::path &ZC_GetParamsDir()
         return path;
 
     path = ZC_GetBaseParamsDir();
-    path /= BaseParams().DataDir();
 
     return path;
 }

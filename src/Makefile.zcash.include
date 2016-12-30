@@ -1,6 +1,6 @@
 bin_PROGRAMS += \
   zcash/GenerateParams \
-  zerocash/tests/utilTest
+  zcash/CreateJoinSplit
 
 # tool for generating our public parameters
 zcash_GenerateParams_SOURCES = zcash/GenerateParams.cpp
@@ -11,11 +11,12 @@ zcash_GenerateParams_LDADD = \
   $(LIBBITCOIN_CRYPTO) \
   $(LIBZCASH_LIBS)
 
-# tests for utilities that come with zerocash
-zerocash_tests_utilTest_SOURCES = zerocash/tests/utilTest.cpp
-zerocash_tests_utilTest_LDADD = \
-  $(BOOST_LIBS) \
-  $(LIBZCASH) \
+# tool for profiling the creation of joinsplits
+zcash_CreateJoinSplit_SOURCES = zcash/CreateJoinSplit.cpp
+zcash_CreateJoinSplit_LDADD = \
+  $(LIBBITCOIN_COMMON) \
   $(LIBBITCOIN_UTIL) \
   $(LIBBITCOIN_CRYPTO) \
+  $(LIBZCASH) \
+  $(BOOST_LIBS) \
   $(LIBZCASH_LIBS)

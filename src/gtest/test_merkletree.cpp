@@ -5,6 +5,7 @@
 #include "test/data/merkle_serialization.json.h"
 #include "test/data/merkle_witness_serialization.json.h"
 #include "test/data/merkle_path.json.h"
+#include "test/data/merkle_commitments.json.h"
 
 #include <iostream>
 
@@ -15,6 +16,9 @@
 #include "serialize.h"
 #include "streams.h"
 
+#include "zcash/IncrementalMerkleTree.hpp"
+#include "zcash/util.h"
+
 #include "libsnark/common/default_types/r1cs_ppzksnark_pp.hpp"
 #include "libsnark/zk_proof_systems/ppzksnark/r1cs_ppzksnark/r1cs_ppzksnark.hpp"
 #include "libsnark/gadgetlib1/gadgets/hashes/sha256/sha256_gadget.hpp"
@@ -22,51 +26,10 @@
 
 #include <boost/foreach.hpp>
 
-#include "json/json_spirit_reader_template.h"
-#include "json/json_spirit_utils.h"
-#include "json/json_spirit_writer_template.h"
-
-using namespace json_spirit;
-Array
-read_json(const std::string& jsondata)
-{
-    Value v;
-
-    if (!read_string(jsondata, v) || v.type() != array_type)
-    {
-        ADD_FAILURE();
-        return Array();
-    }
-    return v.get_array();
-}
-
-#include "zcash/IncrementalMerkleTree.hpp"
-#include "zerocash/utils/util.h"
-
-//#define PRINT_JSON 1
+#include "json_test_vectors.h"
 
 using namespace std;
-using namespace libzerocash;
 using namespace libsnark;
-
-
-template<typename T>
-void expect_deser_same(const T& expected)
-{
-    CDataStream ss1(SER_NETWORK, PROTOCOL_VERSION);
-    ss1 << expected;
-
-    auto serialized_size = ss1.size();
-
-    T object;
-    ss1 >> object;
-
-    CDataStream ss2(SER_NETWORK, PROTOCOL_VERSION);
-    ss2 << object;
-
-    ASSERT_TRUE(serialized_size == ss2.size());
-    ASSERT_TRUE(memcmp(&*ss1.begin(), &*ss2.begin(), serialized_size) == 0);
-}
 
 template<>
 void expect_deser_same(const ZCTestingIncrementalWitness& expected)
@@ -87,39 +50,25 @@ void expect_deser_same(const libzcash::MerklePath& expected)
     // deserialized by Bitcoin's serialization code.
 }
 
-template<typename T, typename U>
-void expect_test_vector(T& it, const U& expected)
-{
-    expect_deser_same(expected);
-
-    CDataStream ss1(SER_NETWORK, PROTOCOL_VERSION);
-    ss1 << expected;
-
-    #ifdef PRINT_JSON
-    std::cout << "\t\"" ;
-    std::cout << HexStr(ss1.begin(), ss1.end()) << "\",\n";
-    #else
-    std::string raw = (it++)->get_str();
-    CDataStream ss2(ParseHex(raw), SER_NETWORK, PROTOCOL_VERSION);
-
-    ASSERT_TRUE(ss1.size() == ss2.size());
-    ASSERT_TRUE(memcmp(&*ss1.begin(), &*ss2.begin(), ss1.size()) == 0);
-    #endif
-}
-
 template<typename A, typename B, typename C>
 void expect_ser_test_vector(B& b, const C& c, const A& tree) {
     expect_test_vector<B, C>(b, c);
 }
 
 template<typename Tree, typename Witness>
-void test_tree(Array root_tests, Array ser_tests, Array witness_ser_tests, Array path_tests) {
+void test_tree(
+    Array commitment_tests,
+    Array root_tests,
+    Array ser_tests,
+    Array witness_ser_tests,
+    Array path_tests
+)
+{
+    Array::iterator commitment_iterator = commitment_tests.begin();
     Array::iterator root_iterator = root_tests.begin();
     Array::iterator ser_iterator = ser_tests.begin();
     Array::iterator witness_ser_iterator = witness_ser_tests.begin();
     Array::iterator path_iterator = path_tests.begin();
-
-    uint256 test_commitment = uint256S("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
 
     Tree tree;
 
@@ -127,17 +76,31 @@ void test_tree(Array root_tests, Array ser_tests, Array witness_ser_tests, Array
     // empty tree.
     ASSERT_TRUE(tree.root() == Tree::empty_root());
 
+    // The tree doesn't have a 'last' element added since it's blank.
+    ASSERT_THROW(tree.last(), std::runtime_error);
+
+    // The tree is empty.
+    ASSERT_TRUE(tree.size() == 0);
+
     // We need to witness at every single point in the tree, so
     // that the consistency of the tree and the merkle paths can
     // be checked.
     vector<Witness> witnesses;
 
     for (size_t i = 0; i < 16; i++) {
+        uint256 test_commitment = uint256S((commitment_iterator++)->get_str());
+
         // Witness here
         witnesses.push_back(tree.witness());
 
         // Now append a commitment to the tree
         tree.append(test_commitment);
+
+        // Size incremented by one.
+        ASSERT_TRUE(tree.size() == i+1);
+
+        // Last element added to the tree was `test_commitment`
+        ASSERT_TRUE(tree.last() == test_commitment);
 
         // Check tree root consistency
         expect_test_vector(root_iterator, tree.root());
@@ -153,6 +116,7 @@ void test_tree(Array root_tests, Array ser_tests, Array witness_ser_tests, Array
 
             if (first) {
                 ASSERT_THROW(wit.path(), std::runtime_error);
+                ASSERT_THROW(wit.element(), std::runtime_error);
             } else {
                 auto path = wit.path();
 
@@ -177,11 +141,12 @@ void test_tree(Array root_tests, Array ser_tests, Array witness_ser_tests, Array
 
                     std::vector<bool> commitment_bv;
                     {
-                        std::vector<unsigned char> commitment_v(test_commitment.begin(), test_commitment.end());
-                        convertBytesVectorToVector(commitment_v, commitment_bv);
+                        uint256 witnessed_commitment = wit.element();
+                        std::vector<unsigned char> commitment_v(witnessed_commitment.begin(), witnessed_commitment.end());
+                        commitment_bv = convertBytesVectorToVector(commitment_v);
                     }
 
-                    size_t path_index = libzerocash::convertVectorToInt(path.index);
+                    size_t path_index = convertVectorToInt(path.index);
 
                     commitment.bits.fill_with_bits(pb, bit_vector(commitment_bv));
                     positions.fill_with_bits_of_ulong(pb, path_index);
@@ -193,7 +158,7 @@ void test_tree(Array root_tests, Array ser_tests, Array witness_ser_tests, Array
                     {
                         uint256 witroot = wit.root();
                         std::vector<unsigned char> root_v(witroot.begin(), witroot.end());
-                        convertBytesVectorToVector(root_v, root_bv);
+                        root_bv = convertBytesVectorToVector(root_v);
                     }
 
                     root.bits.fill_with_bits(pb, bit_vector(root_bv));
@@ -228,14 +193,13 @@ void test_tree(Array root_tests, Array ser_tests, Array witness_ser_tests, Array
 }
 
 TEST(merkletree, vectors) {
-    libsnark::default_r1cs_ppzksnark_pp::init_public_params();
-
     Array root_tests = read_json(std::string(json_tests::merkle_roots, json_tests::merkle_roots + sizeof(json_tests::merkle_roots)));
     Array ser_tests = read_json(std::string(json_tests::merkle_serialization, json_tests::merkle_serialization + sizeof(json_tests::merkle_serialization)));
     Array witness_ser_tests = read_json(std::string(json_tests::merkle_witness_serialization, json_tests::merkle_witness_serialization + sizeof(json_tests::merkle_witness_serialization)));
     Array path_tests = read_json(std::string(json_tests::merkle_path, json_tests::merkle_path + sizeof(json_tests::merkle_path)));
+    Array commitment_tests = read_json(std::string(json_tests::merkle_commitments, json_tests::merkle_commitments + sizeof(json_tests::merkle_commitments)));
 
-    test_tree<ZCTestingIncrementalMerkleTree, ZCTestingIncrementalWitness>(root_tests, ser_tests, witness_ser_tests, path_tests);
+    test_tree<ZCTestingIncrementalMerkleTree, ZCTestingIncrementalWitness>(commitment_tests, root_tests, ser_tests, witness_ser_tests, path_tests);
 }
 
 TEST(merkletree, emptyroots) {

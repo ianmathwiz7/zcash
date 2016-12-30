@@ -1,21 +1,16 @@
 *.tar.gz
-
+*.deb
 *.exe
 src/bitcoin
 src/zcashd
 src/zcash-cli
 src/zcash-gtest
-src/bitcoin-tx
+src/zcash-tx
 src/test/test_bitcoin
 src/qt/test/test_bitcoin-qt
 
-# zerocash tests and utilities
+# Zcash utilities
 src/zcash/GenerateParams
-src/zerocash/GenerateParamsForFiles
-src/zerocash/tests/merkleTest
-src/zerocash/tests/utilTest
-src/zerocash/tests/zerocashTest
-src/zerocash/tests/test_zerocash_pour_ppzksnark
 
 *zcashTest.pk
 *zcashTest.vk
@@ -66,11 +61,11 @@ src/qt/test/moc*.cpp
 *.pyc
 *.o
 *.o-*
-*.patch
 .zcash
 *.a
 *.pb.cc
 *.pb.h
+.vscode
 
 *.log
 *.trs
@@ -126,4 +121,4 @@ qa/pull-tester/test.*/*
 
 /doc/doxygen/
 
-libbitcoinconsensus.pc
+libzcashconsensus.pc

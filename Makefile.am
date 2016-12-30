@@ -6,7 +6,7 @@ GZIP_ENV="-9n"
 
 if BUILD_BITCOIN_LIBS
 pkgconfigdir = $(libdir)/pkgconfig
-pkgconfig_DATA = libbitcoinconsensus.pc
+pkgconfig_DATA = libzcashconsensus.pc
 endif
 
 BITCOIND_BIN=$(top_builddir)/src/zcashd$(EXEEXT)
@@ -26,10 +26,12 @@ OSX_QT_TRANSLATIONS = da,de,es,hu,ru,uk,zh_CN,zh_TW
 
 DIST_DOCS = $(wildcard doc/*.md) $(wildcard doc/release-notes/*.md)
 
+BIN_CHECKS=$(top_srcdir)/contrib/devtools/symbol-check.py \
+           $(top_srcdir)/contrib/devtools/security-check.py
+
 WINDOWS_PACKAGING = $(top_srcdir)/share/pixmaps/bitcoin.ico \
   $(top_srcdir)/share/pixmaps/nsis-header.bmp \
-  $(top_srcdir)/share/pixmaps/nsis-wizard.bmp \
-  $(top_srcdir)/doc/README_windows.txt
+  $(top_srcdir)/share/pixmaps/nsis-wizard.bmp
 
 OSX_PACKAGING = $(OSX_DEPLOY_SCRIPT) $(OSX_FANCY_PLIST) $(OSX_INSTALLER_ICONS) $(OSX_BASE_LPROJ_DIR) \
   $(top_srcdir)/contrib/macdeploy/$(OSX_BACKGROUND_IMAGE) \
@@ -40,7 +42,8 @@ OSX_PACKAGING = $(OSX_DEPLOY_SCRIPT) $(OSX_FANCY_PLIST) $(OSX_INSTALLER_ICONS) $
 COVERAGE_INFO = baseline_filtered_combined.info baseline.info block_test.info \
   leveldb_baseline.info test_bitcoin_filtered.info total_coverage.info \
   baseline_filtered.info block_test_filtered.info \
-  leveldb_baseline_filtered.info test_bitcoin_coverage.info test_bitcoin.info
+  leveldb_baseline_filtered.info test_bitcoin_coverage.info test_bitcoin.info \
+  zcash-gtest.info zcash-gtest_filtered.info zcash-gtest_coverage.info
 
 dist-hook:
 	-$(MAKE) -C $(top_distdir)/src/leveldb clean
@@ -148,13 +151,27 @@ baseline.info:
 	$(LCOV) -c -i -d $(abs_builddir)/src -o $@
 
 baseline_filtered.info: baseline.info
-	$(LCOV) -r $< "/usr/include/*" -o $@
+	$(LCOV) -r $< "/usr/include/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/*.h" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/boost/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gmock/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gtest/*" \
+                      "$(abs_builddir)/src/gtest/*" \
+                      "$(abs_builddir)/src/test/*" \
+                      -o $@
 
 leveldb_baseline.info: baseline_filtered.info
 	$(LCOV) -c -i -d $(abs_builddir)/src/leveldb -b $(abs_builddir)/src/leveldb -o $@
 
 leveldb_baseline_filtered.info: leveldb_baseline.info
-	$(LCOV) -r $< "/usr/include/*" -o $@
+	$(LCOV) -r $< "/usr/include/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/*.h" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/boost/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gmock/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gtest/*" \
+                      "$(abs_builddir)/src/gtest/*" \
+                      "$(abs_builddir)/src/test/*" \
+                      -o $@
 
 baseline_filtered_combined.info: leveldb_baseline_filtered.info baseline_filtered.info
 	$(LCOV) -a leveldb_baseline_filtered.info -a baseline_filtered.info -o $@
@@ -166,7 +183,14 @@ test_bitcoin.info: baseline_filtered_combined.info
 	$(LCOV) -z -d $(abs_builddir)/src/leveldb
 
 test_bitcoin_filtered.info: test_bitcoin.info
-	$(LCOV) -r $< "/usr/include/*" -o $@
+	$(LCOV) -r $< "/usr/include/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/*.h" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/boost/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gmock/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gtest/*" \
+                      "$(abs_builddir)/src/gtest/*" \
+                      "$(abs_builddir)/src/test/*" \
+                      -o $@
 
 zcash-gtest.info: baseline_filtered_combined.info
 	$(MAKE) -C src/ zcash-gtest_check
@@ -175,7 +199,14 @@ zcash-gtest.info: baseline_filtered_combined.info
 	$(LCOV) -z -d $(abs_builddir)/src/leveldb
 
 zcash-gtest_filtered.info: zcash-gtest.info
-	$(LCOV) -r $< "/usr/include/*" -o $@
+	$(LCOV) -r $< "/usr/include/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/*.h" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/boost/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gmock/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gtest/*" \
+                      "$(abs_builddir)/src/gtest/*" \
+                      "$(abs_builddir)/src/test/*" \
+                      -o $@
 
 block_test.info: test_bitcoin_filtered.info
 	$(MKDIR_P) qa/tmp
@@ -185,7 +216,14 @@ block_test.info: test_bitcoin_filtered.info
 	$(LCOV) -z -d $(abs_builddir)/src/leveldb
 
 block_test_filtered.info: block_test.info
-	$(LCOV) -r $< "/usr/include/*" -o $@
+	$(LCOV) -r $< "/usr/include/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/*.h" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/boost/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gmock/*" \
+                      "$(abs_builddir)/depends/x86_64-unknown-linux-gnu/include/gtest/*" \
+                      "$(abs_builddir)/src/gtest/*" \
+                      "$(abs_builddir)/src/test/*" \
+                      -o $@
 
 test_bitcoin_coverage.info: baseline_filtered_combined.info test_bitcoin_filtered.info
 	$(LCOV) -a baseline_filtered.info -a leveldb_baseline_filtered.info -a test_bitcoin_filtered.info -o $@
@@ -220,13 +258,17 @@ check-local:
 	@qa/pull-tester/run-bitcoind-for-test.sh $(JAVA) -jar $(JAVA_COMPARISON_TOOL) qa/tmp/compTool $(COMPARISON_TOOL_REORG_TESTS) 2>&1
 endif
 
-dist_noinst_SCRIPTS = autogen.sh
+dist_bin_SCRIPTS = zcutil/fetch-params.sh
+dist_noinst_SCRIPTS = autogen.sh zcutil/build-debian-package.sh zcutil/build.sh
 
-EXTRA_DIST = $(top_srcdir)/share/genbuild.sh qa/pull-tester/rpc-tests.sh qa/pull-tester/run-bitcoin-cli qa/rpc-tests qa/zerocash $(DIST_DOCS) $(WINDOWS_PACKAGING) $(OSX_PACKAGING)
+EXTRA_DIST = $(top_srcdir)/share/genbuild.sh qa/pull-tester/rpc-tests.sh qa/pull-tester/run-bitcoin-cli qa/rpc-tests qa/zcash $(DIST_DOCS) $(BIN_CHECKS)
+
+install-exec-hook:
+	mv $(DESTDIR)$(bindir)/fetch-params.sh $(DESTDIR)$(bindir)/zcash-fetch-params
 
 CLEANFILES = $(OSX_DMG) $(BITCOIN_WIN_INSTALLER)
 
 .INTERMEDIATE: $(COVERAGE_INFO)
 
 clean-local:
-	rm -rf test_bitcoin.coverage/ total.coverage/ $(OSX_APP)
+	rm -rf test_bitcoin.coverage/ zcash-gtest.coverage/ total.coverage/ $(OSX_APP)

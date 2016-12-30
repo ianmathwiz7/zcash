@@ -91,11 +91,22 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "estimatepriority", 0 },
     { "prioritisetransaction", 1 },
     { "prioritisetransaction", 2 },
-    { "zcrawpour", 1 },
-    { "zcrawpour", 2 },
-    { "zcrawpour", 3 },
-    { "zcrawpour", 4 },
-    { "zcbenchmark", 1 }
+    { "zcrawjoinsplit", 1 },
+    { "zcrawjoinsplit", 2 },
+    { "zcrawjoinsplit", 3 },
+    { "zcrawjoinsplit", 4 },
+    { "zcbenchmark", 1 },
+    { "zcbenchmark", 2 },
+    { "getblocksubsidy", 0},
+    { "z_listreceivedbyaddress", 1},    
+    { "z_getbalance", 1},
+    { "z_gettotalbalance", 0},
+    { "z_sendmany", 1},
+    { "z_sendmany", 2},
+    { "z_sendmany", 3},
+    { "z_getoperationstatus", 0},
+    { "z_getoperationresult", 0},
+    { "z_importkey", 1 }
 };
 
 class CRPCConvertTable

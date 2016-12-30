@@ -30,7 +30,10 @@ JSON_TEST_FILES = \
   test/data/merkle_roots_empty.json \
   test/data/merkle_serialization.json \
   test/data/merkle_witness_serialization.json \
-  test/data/merkle_path.json
+  test/data/merkle_path.json \
+  test/data/merkle_commitments.json \
+  test/data/g1_compressed.json \
+  test/data/g2_compressed.json
 
 RAW_TEST_FILES = test/data/alertTests.raw
 
@@ -101,7 +104,7 @@ if ENABLE_WALLET
 test_test_bitcoin_LDADD += $(LIBBITCOIN_WALLET)
 endif
 
-test_test_bitcoin_LDADD += $(LIBBITCOIN_CONSENSUS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS) $(LIBZCASH) $(LIBZCASH_LIBS)
+test_test_bitcoin_LDADD += $(LIBZCASH_CONSENSUS) $(BDB_LIBS) $(SSL_LIBS) $(CRYPTO_LIBS) $(MINIUPNPC_LIBS) $(LIBZCASH) $(LIBZCASH_LIBS)
 test_test_bitcoin_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS) -static
 
 nodist_test_test_bitcoin_SOURCES = $(GENERATED_TEST_FILES)

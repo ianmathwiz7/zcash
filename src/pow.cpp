@@ -24,20 +24,13 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     if (pindexLast == NULL)
         return nProofOfWorkLimit;
 
-    {
-        if (params.fPowAllowMinDifficultyBlocks)
-        {
-            // Special difficulty rule for testnet:
-            // If the new block's timestamp is more than 2* 10 minutes
-            // then allow mining of a min-difficulty block.
-            if (pblock->GetBlockTime() > pindexLast->GetBlockTime() + params.nPowTargetSpacing*2)
-                return nProofOfWorkLimit;
-        }
-    }
-
     // Find the first block in the averaging interval
     const CBlockIndex* pindexFirst = pindexLast;
+    arith_uint256 bnTot {0};
     for (int i = 0; pindexFirst && i < params.nPowAveragingWindow; i++) {
+        arith_uint256 bnTmp;
+        bnTmp.SetCompact(pindexFirst->nBits);
+        bnTot += bnTmp;
         pindexFirst = pindexFirst->pprev;
     }
 
@@ -45,14 +38,18 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
     if (pindexFirst == NULL)
         return nProofOfWorkLimit;
 
-    return CalculateNextWorkRequired(pindexLast, pindexFirst->GetMedianTimePast(), params);
+    arith_uint256 bnAvg {bnTot / params.nPowAveragingWindow};
+
+    return CalculateNextWorkRequired(bnAvg, pindexLast->GetMedianTimePast(), pindexFirst->GetMedianTimePast(), params);
 }
 
-unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nFirstBlockTime, const Consensus::Params& params)
+unsigned int CalculateNextWorkRequired(arith_uint256 bnAvg,
+                                       int64_t nLastBlockTime, int64_t nFirstBlockTime,
+                                       const Consensus::Params& params)
 {
     // Limit adjustment step
     // Use medians to prevent time-warp attacks
-    int64_t nActualTimespan = pindexLast->GetMedianTimePast() - nFirstBlockTime;
+    int64_t nActualTimespan = nLastBlockTime - nFirstBlockTime;
     LogPrint("pow", "  nActualTimespan = %d  before dampening\n", nActualTimespan);
     nActualTimespan = params.AveragingWindowTimespan() + (nActualTimespan - params.AveragingWindowTimespan())/4;
     LogPrint("pow", "  nActualTimespan = %d  before bounds\n", nActualTimespan);
@@ -64,10 +61,7 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
 
     // Retarget
     const arith_uint256 bnPowLimit = UintToArith256(params.powLimit);
-    arith_uint256 bnNew;
-    arith_uint256 bnOld;
-    bnNew.SetCompact(pindexLast->nBits);
-    bnOld = bnNew;
+    arith_uint256 bnNew {bnAvg};
     bnNew /= params.AveragingWindowTimespan();
     bnNew *= nActualTimespan;
 
@@ -77,7 +71,7 @@ unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nF
     /// debug print
     LogPrint("pow", "GetNextWorkRequired RETARGET\n");
     LogPrint("pow", "params.AveragingWindowTimespan() = %d    nActualTimespan = %d\n", params.AveragingWindowTimespan(), nActualTimespan);
-    LogPrint("pow", "Before: %08x  %s\n", pindexLast->nBits, bnOld.ToString());
+    LogPrint("pow", "Current average: %08x  %s\n", bnAvg.GetCompact(), bnAvg.ToString());
     LogPrint("pow", "After:  %08x  %s\n", bnNew.GetCompact(), bnNew.ToString());
 
     return bnNew.GetCompact();

@@ -83,3 +83,12 @@ bool CBasicKeyStore::HaveWatchOnly() const
     LOCK(cs_KeyStore);
     return (!setWatchOnly.empty());
 }
+
+bool CBasicKeyStore::AddSpendingKey(const libzcash::SpendingKey &sk)
+{
+    LOCK(cs_SpendingKeyStore);
+    auto address = sk.address();
+    mapSpendingKeys[address] = sk;
+    mapNoteDecryptors.insert(std::make_pair(address, ZCNoteDecryption(sk.viewing_key())));
+    return true;
+}

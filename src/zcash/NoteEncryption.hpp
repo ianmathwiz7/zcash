@@ -37,8 +37,8 @@ public:
     }
 
     // Encrypts `message` with `pk_enc` and returns the ciphertext.
-    // This can only be called twice for a given instantiation before
-    // the nonce-space runs out.
+    // This is only called ZC_NUM_JS_OUTPUTS times for a given instantiation; 
+    // but can be called 255 times before the nonce-space runs out.
     Ciphertext encrypt(const uint256 &pk_enc,
                        const Plaintext &message
                       );
@@ -61,6 +61,7 @@ public:
     typedef boost::array<unsigned char, CLEN> Ciphertext;
     typedef boost::array<unsigned char, MLEN> Plaintext;
 
+    NoteDecryption() { }
     NoteDecryption(uint256 sk_enc);
 
     Plaintext decrypt(const Ciphertext &ciphertext,
@@ -68,6 +69,14 @@ public:
                       const uint256 &hSig,
                       unsigned char nonce
                      ) const;
+
+    friend inline bool operator==(const NoteDecryption& a, const NoteDecryption& b) {
+        return a.sk_enc == b.sk_enc && a.pk_enc == b.pk_enc;
+    }
+    friend inline bool operator<(const NoteDecryption& a, const NoteDecryption& b) {
+        return (a.sk_enc < b.sk_enc ||
+                (a.sk_enc == b.sk_enc && a.pk_enc < b.pk_enc));
+    }
 };
 
 uint256 random_uint256();
@@ -75,7 +84,7 @@ uint252 random_uint252();
 
 }
 
-typedef libzcash::NoteEncryption<ZC_NOTEPLAINTEXT_LEADING + ZC_V_SIZE + ZC_RHO_SIZE + ZC_R_SIZE + ZC_MEMO_SIZE> ZCNoteEncryption;
-typedef libzcash::NoteDecryption<ZC_NOTEPLAINTEXT_LEADING + ZC_V_SIZE + ZC_RHO_SIZE + ZC_R_SIZE + ZC_MEMO_SIZE> ZCNoteDecryption;
+typedef libzcash::NoteEncryption<ZC_NOTEPLAINTEXT_SIZE> ZCNoteEncryption;
+typedef libzcash::NoteDecryption<ZC_NOTEPLAINTEXT_SIZE> ZCNoteDecryption;
 
 #endif /* ZC_NOTE_ENCRYPTION_H_ */

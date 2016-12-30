@@ -4,7 +4,7 @@
 
 #include "zcash/IncrementalMerkleTree.hpp"
 #include "crypto/sha256.h"
-#include "zerocash/utils/util.h" // TODO: remove these utilities
+#include "zcash/util.h"
 
 namespace libzcash {
 
@@ -68,6 +68,36 @@ void IncrementalMerkleTree<Depth, Hash>::wfcheck() const {
     if (!left && parents.size() > 0) {
         throw std::ios_base::failure("tree has non-canonical representation; parents should not be unempty");
     }
+}
+
+template<size_t Depth, typename Hash>
+Hash IncrementalMerkleTree<Depth, Hash>::last() const {
+    if (right) {
+        return *right;
+    } else if (left) {
+        return *left;
+    } else {
+        throw std::runtime_error("tree has no cursor");
+    }
+}
+
+template<size_t Depth, typename Hash>
+size_t IncrementalMerkleTree<Depth, Hash>::size() const {
+    size_t ret = 0;
+    if (left) {
+        ret++;
+    }
+    if (right) {
+        ret++;
+    }
+    // Treat occupation of parents array as a binary number
+    // (right-shifted by 1)
+    for (size_t i = 0; i < parents.size(); i++) {
+        if (parents[i]) {
+            ret += (1 << (i+1));
+        }
+    }
+    return ret;
 }
 
 template<size_t Depth, typename Hash>
@@ -244,11 +274,8 @@ MerklePath IncrementalMerkleTree<Depth, Hash>::path(std::deque<Hash> filler_hash
     BOOST_FOREACH(Hash b, path)
     {
         std::vector<unsigned char> hashv(b.begin(), b.end());
-        std::vector<bool> tmp_b;
 
-        libzerocash::convertBytesVectorToVector(hashv, tmp_b);
-
-        merkle_path.push_back(tmp_b);
+        merkle_path.push_back(convertBytesVectorToVector(hashv));
     }
 
     std::reverse(merkle_path.begin(), merkle_path.end());

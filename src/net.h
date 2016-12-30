@@ -59,6 +59,8 @@ static const bool DEFAULT_UPNP = false;
 #endif
 /** The maximum number of entries in mapAskFor */
 static const size_t MAPASKFOR_MAX_SZ = MAX_INV_SZ;
+/** The maximum number of entries in setAskFor (larger due to getdata latency)*/
+static const size_t SETASKFOR_MAX_SZ = 2 * MAX_INV_SZ;
 
 unsigned int ReceiveFloodSize();
 unsigned int SendBufferSize();
@@ -140,6 +142,7 @@ extern bool fListen;
 extern uint64_t nLocalServices;
 extern uint64_t nLocalHostNonce;
 extern CAddrMan addrman;
+/** Maximum number of connections to simultaneously allow (aka connection slots) */
 extern int nMaxConnections;
 
 extern std::vector<CNode*> vNodes;
@@ -275,6 +278,7 @@ public:
     // b) the peer may tell us in its version message that we should not relay tx invs
     //    until it has initialized its bloom filter.
     bool fRelayTxes;
+    bool fSentAddr;
     CSemaphoreGrant grantOutbound;
     CCriticalSection cs_filter;
     CBloomFilter* pfilter;
@@ -309,6 +313,7 @@ public:
     mruset<CInv> setInventoryKnown;
     std::vector<CInv> vInventoryToSend;
     CCriticalSection cs_inventory;
+    std::set<uint256> setAskFor;
     std::multimap<int64_t, CInv> mapAskFor;
 
     // Ping time measurement:
@@ -318,6 +323,8 @@ public:
     int64_t nPingUsecStart;
     // Last measured round-trip time.
     int64_t nPingUsecTime;
+    // Best measured round-trip time.
+    int64_t nMinPingUsecTime;
     // Whether a ping is requested.
     bool fPingQueued;
 

@@ -35,10 +35,6 @@ uint256 static SignatureHashOld(CScript scriptCode, const CTransaction& txTo, un
     }
     CMutableTransaction txTmp(txTo);
 
-    // In case concatenating two scripts ends up with two codeseparators,
-    // or an extra one at the end, this prevents all those possible incompatibilities.
-    scriptCode.FindAndDelete(CScript(OP_CODESEPARATOR));
-
     // Blank out other inputs' signatures
     for (unsigned int i = 0; i < txTmp.vin.size(); i++)
         txTmp.vin[i].scriptSig = CScript();
@@ -91,7 +87,7 @@ uint256 static SignatureHashOld(CScript scriptCode, const CTransaction& txTo, un
 }
 
 void static RandomScript(CScript &script) {
-    static const opcodetype oplist[] = {OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN, OP_CODESEPARATOR};
+    static const opcodetype oplist[] = {OP_FALSE, OP_1, OP_2, OP_3, OP_CHECKSIG, OP_IF, OP_VERIF, OP_RETURN};
     script = CScript();
     int ops = (insecure_rand() % 10);
     for (int i=0; i<ops; i++)
@@ -105,7 +101,7 @@ void static RandomTransaction(CMutableTransaction &tx, bool fSingle) {
     tx.nLockTime = (insecure_rand() % 2) ? insecure_rand() : 0;
     int ins = (insecure_rand() % 4) + 1;
     int outs = fSingle ? ins : (insecure_rand() % 4) + 1;
-    int pours = (insecure_rand() % 4);
+    int joinsplits = (insecure_rand() % 4);
     for (int in = 0; in < ins; in++) {
         tx.vin.push_back(CTxIn());
         CTxIn &txin = tx.vin.back();
@@ -121,38 +117,35 @@ void static RandomTransaction(CMutableTransaction &tx, bool fSingle) {
         RandomScript(txout.scriptPubKey);
     }
     if (tx.nVersion >= 2) {
-        for (int pour = 0; pour < pours; pour++) {
-            CPourTx pourtx;
+        for (int js = 0; js < joinsplits; js++) {
+            JSDescription jsdesc;
             if (insecure_rand() % 2 == 0) {
-                pourtx.vpub_old = insecure_rand() % 100000000;
+                jsdesc.vpub_old = insecure_rand() % 100000000;
             } else {
-                pourtx.vpub_new = insecure_rand() % 100000000;
+                jsdesc.vpub_new = insecure_rand() % 100000000;
             }
 
-            pourtx.anchor = GetRandHash();
-            pourtx.serials[0] = GetRandHash();
-            pourtx.serials[1] = GetRandHash();
-            pourtx.ephemeralKey = GetRandHash();
-            pourtx.randomSeed = GetRandHash();
-            randombytes_buf(pourtx.ciphertexts[0].begin(), pourtx.ciphertexts[0].size());
-            randombytes_buf(pourtx.ciphertexts[1].begin(), pourtx.ciphertexts[1].size());
-            randombytes_buf(pourtx.proof.begin(), pourtx.proof.size());
-            pourtx.macs[0] = GetRandHash();
-            pourtx.macs[1] = GetRandHash();
+            jsdesc.anchor = GetRandHash();
+            jsdesc.nullifiers[0] = GetRandHash();
+            jsdesc.nullifiers[1] = GetRandHash();
+            jsdesc.ephemeralKey = GetRandHash();
+            jsdesc.randomSeed = GetRandHash();
+            randombytes_buf(jsdesc.ciphertexts[0].begin(), jsdesc.ciphertexts[0].size());
+            randombytes_buf(jsdesc.ciphertexts[1].begin(), jsdesc.ciphertexts[1].size());
+            jsdesc.proof = libzcash::ZCProof::random_invalid();
+            jsdesc.macs[0] = GetRandHash();
+            jsdesc.macs[1] = GetRandHash();
 
-            tx.vpour.push_back(pourtx);
+            tx.vjoinsplit.push_back(jsdesc);
         }
 
         unsigned char joinSplitPrivKey[crypto_sign_SECRETKEYBYTES];
         crypto_sign_keypair(tx.joinSplitPubKey.begin(), joinSplitPrivKey);
 
-        // TODO: #966.
-        static const uint256 one(uint256S("0000000000000000000000000000000000000000000000000000000000000001"));
         // Empty output script.
         CScript scriptCode;
         CTransaction signTx(tx);
         uint256 dataToBeSigned = SignatureHash(scriptCode, signTx, NOT_AN_INPUT, SIGHASH_ALL);
-        BOOST_CHECK(dataToBeSigned != one);
 
         assert(crypto_sign_detached(&tx.joinSplitSig[0], NULL,
                                     dataToBeSigned.begin(), 32,
@@ -244,9 +237,14 @@ BOOST_AUTO_TEST_CASE(sighash_from_data)
           stream >> tx;
 
           CValidationState state;
-          state.SetPerformPourVerification(false); // don't verify the snark
-          BOOST_CHECK_MESSAGE(CheckTransaction(tx, state), strTest);
-          BOOST_CHECK(state.IsValid());
+          if (tx.nVersion < MIN_TX_VERSION) {
+              // Transaction must be invalid
+              BOOST_CHECK_MESSAGE(!CheckTransactionWithoutProofVerification(tx, state), strTest);
+              BOOST_CHECK(!state.IsValid());
+          } else {
+              BOOST_CHECK_MESSAGE(CheckTransactionWithoutProofVerification(tx, state), strTest);
+              BOOST_CHECK(state.IsValid());
+          }
 
           std::vector<unsigned char> raw = ParseHex(raw_script);
           scriptCode.insert(scriptCode.end(), raw.begin(), raw.end());
